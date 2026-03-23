@@ -59,8 +59,6 @@ LLM_MODEL_PATH = os.environ.get("LLM_MODEL_PATH", "")  # Path to GGUF file
 ONNX_MODEL_PATH = os.environ.get("ONNX_MODEL_PATH", "")
 
 # HuggingFace config - use new router endpoint
-HF_TOKEN = os.environ.get("HF_TOKEN", "")
-HF_MODEL = os.environ.get("HF_MODEL", "mixedbread-ai/mxbai-embed-large-v1")
 
 # Ollama config
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/api/embeddings")
@@ -70,7 +68,7 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/api/embeddings
 # ============================================================================
 
 # Priority order when auto-detecting: llama.cpp > HF API > ONNX > Ollama
-BACKEND_PRIORITY = ["llama", "hf", "onnx", "ollama"]
+BACKEND_PRIORITY = ["llama", "onnx", "ollama"]
 
 # Global state for backends
 _llama_session = None
@@ -96,7 +94,6 @@ def _detect_available_backends() -> List[str]:
             print(f"   [Backend] llama.cpp configured but llama-cpp-python not installed")
     
     # 2. Check HuggingFace API (new router endpoint)
-    if HF_TOKEN:
         available.append("hf")
         print(f"   [Backend] HuggingFace API available (token set)")
     
@@ -194,37 +191,6 @@ def _llama_embed(text: str) -> List[float]:
 
 
 # ============================================================================
-# HUGGINGFACE API BACKEND (New router endpoint)
-# ============================================================================
-
-def _hf_embed(text: str) -> List[float]:
-    """Get embedding from HuggingFace Inference API using new router endpoint."""
-    try:
-        # Use new router endpoint (NOT the deprecated api-inference.huggingface.co)
-        API_URL = f"https://router.huggingface.co/hf-inference/models/{HF_MODEL}"
-        resp = requests.post(
-            API_URL,
-            headers={
-                "Authorization": f"Bearer {HF_TOKEN}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "inputs": text,
-                "truncate": 512
-            },
-            timeout=30
-        )
-        resp.raise_for_status()
-        embedding = resp.json()
-        
-        if isinstance(embedding, list) and len(embedding) > 0:
-            return embedding
-        elif isinstance(embedding, dict) and "embedding" in embedding:
-            return embedding["embedding"]
-        else:
-            raise Exception(f"HF API returned invalid response: {embedding}")
-    except Exception as e:
-        raise Exception(f"HuggingFace API failed: {e}")
 
 
 # ============================================================================

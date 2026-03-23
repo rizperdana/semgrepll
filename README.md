@@ -1,27 +1,26 @@
 # semgrepll - Local Semantic Code Search
 
-Local semantic grep using multiple embedding backends with auto-detection.
+Local semantic grep using multiple embedding backends - 100% offline capable.
 
 ## Features
 
-- **Multi-backend support**: llama.cpp, HuggingFace API, ONNX, Ollama
-- **Auto-detection**: Automatically picks fastest available backend
+- **Multi-backend support**: llama.cpp, ONNX, Ollama
+- **Auto-detection**: Automatically picks fastest available local backend
 - **Hybrid storage**: SQLite (small projects) or LanceDB (large)
-- **Offline capable**: Works without network using ONNX or Ollama
+- **100% offline**: No external connections
 - **Embedding caching**: Fast re-indexing
 
 ## Backends (priority order)
 
-1. **llama.cpp** - Fastest local (requires llama-cpp-python)
-2. **HuggingFace API** - Fastest overall (requires network + token)
-3. **ONNX** - Fast local offline (~3s)
-4. **Ollama** - Fallback (~6s)
+1. **llama.cpp** - Fastest local (requires llama-cpp-python + GGUF model)
+2. **ONNX** - Local runtime using HuggingFace model files (~3s)
+3. **Ollama** - Local server fallback (~6s)
 
 ## Installation
 
 ```bash
 pip install semgrepll
-pip install semgrepll[all]  # includes lance, onnx
+pip install semgrepll[onnx]  # for ONNX backend
 ```
 
 ## Usage
@@ -41,9 +40,8 @@ semgrep ls
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `EMBED_BACKEND` | Backend: auto, llama, hf, onnx, ollama | auto |
+| `EMBED_BACKEND` | Backend: auto, llama, onnx, ollama | auto |
 | `EMBED_MODEL` | Model name | mxbai-embed-large-v1 |
-| `HF_TOKEN` | HuggingFace token (for HF API) | - |
 | `LLM_MODEL_PATH` | Path to GGUF model (for llama.cpp) | - |
 | `ONNX_MODEL_PATH` | Path to ONNX model | auto-detect |
 | `SEMGREP_BACKEND` | Storage: auto, sqlite, lance | auto |
@@ -52,6 +50,6 @@ semgrep ls
 
 | Backend | Speed |
 |---------|-------|
-| HF API | ~0.5s |
+| llama.cpp | ~1s (theoretical) |
 | ONNX | ~3s |
 | Ollama | ~6s |
