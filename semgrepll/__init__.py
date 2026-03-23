@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
 Semgrep - Local Semantic Code Search
-Uses Ollama embeddings + SQLite or LanceDB for offline semantic search.
+Uses multiple embedding backends with priority order:
+1. llama.cpp (gguf models via llama-cpp-python) - Primary
+2. HuggingFace API (router.huggingface.co)
+3. ONNX (local runtime)
+4. Ollama (fallback)
 """
 
 import os
@@ -38,9 +42,346 @@ def _save_embedding_cache(cache):
     except:
         pass
 
-# Config
+# ============================================================================
+# EMBEDDING BACKEND CONFIGURATION
+# ============================================================================
+
+# User can override backend: llama/hf/onnx/ollama/auto
+EMBED_BACKEND = os.environ.get("EMBED_BACKEND", "auto").lower()
+
+# Model to use (default: mxbai-embed-large-v1)
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "mxbai-embed-large-v1")
+
+# llama.cpp config
+LLM_MODEL_PATH = os.environ.get("LLM_MODEL_PATH", "")  # Path to GGUF file
+
+# ONNX config
+ONNX_MODEL_PATH = os.environ.get("ONNX_MODEL_PATH", "")
+
+# HuggingFace config - use new router endpoint
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
+HF_MODEL = os.environ.get("HF_MODEL", "mixedbread-ai/mxbai-embed-large-v1")
+
+# Ollama config
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/api/embeddings")
-EMBED_MODEL = os.environ.get("EMBED_MODEL", "mxbai-embed-large")
+
+# ============================================================================
+# BACKEND DETECTION AND PRIORITY
+# ============================================================================
+
+# Priority order when auto-detecting: llama.cpp > HF API > ONNX > Ollama
+BACKEND_PRIORITY = ["llama", "hf", "onnx", "ollama"]
+
+# Global state for backends
+_llama_session = None
+_onx_session = None
+_detected_backends = None
+
+
+def _detect_available_backends() -> List[str]:
+    """Auto-detect available embedding backends based on what's installed/configured."""
+    global _detected_backends
+    if _detected_backends is not None:
+        return _detected_backends
+    
+    available = []
+    
+    # 1. Check llama.cpp (gguf model via llama-cpp-python)
+    if LLM_MODEL_PATH and os.path.exists(LLM_MODEL_PATH):
+        try:
+            from llama_cpp import Llama
+            available.append("llama")
+            print(f"   [Backend] llama.cpp available: {LLM_MODEL_PATH}")
+        except ImportError:
+            print(f"   [Backend] llama.cpp configured but llama-cpp-python not installed")
+    
+    # 2. Check HuggingFace API (new router endpoint)
+    if HF_TOKEN:
+        available.append("hf")
+        print(f"   [Backend] HuggingFace API available (token set)")
+    
+    # 3. Check ONNX runtime
+    onnx_path = ONNX_MODEL_PATH or "/root/models/mxbai-embed-large-v1/onnx/model_quantized.onnx"
+    if os.path.exists(onnx_path):
+        try:
+            import onnxruntime as ort
+            available.append("onnx")
+            print(f"   [Backend] ONNX available: {onnx_path}")
+        except ImportError:
+            print(f"   [Backend] ONNX model exists but onnxruntime not installed")
+    
+    # 4. Check Ollama (always available as fallback)
+    available.append("ollama")
+    print(f"   [Backend] Ollama available (fallback)")
+    
+    _detected_backends = available
+    return available
+
+
+def _get_backend_order() -> List[str]:
+    """Get the ordered list of backends to try based on user config and auto-detection."""
+    if EMBED_BACKEND != "auto":
+        # User explicitly chose a backend
+        if EMBED_BACKEND in ["llama", "hf", "onnx", "ollama"]:
+            return [EMBED_BACKEND]
+        else:
+            print(f"   Warning: Unknown EMBED_BACKEND={EMBED_BACKEND}, using auto")
+    
+    # Auto-detect and use priority order
+    available = _detect_available_backends()
+    
+    # Filter available backends by priority
+    ordered = []
+    for backend in BACKEND_PRIORITY:
+        if backend in available:
+            ordered.append(backend)
+    
+    return ordered
+
+
+# ============================================================================
+# LAMA.CPP BACKEND (Primary)
+# ============================================================================
+
+def _get_llama_session():
+    """Get or create llama.cpp session."""
+    global _llama_session
+    if _llama_session is not None:
+        return _llama_session
+    
+    model_path = LLM_MODEL_PATH
+    if not model_path or not os.path.exists(model_path):
+        # Try common paths
+        common_paths = [
+            "/root/models/mxbai-embed-large-v1/mxbai-embed-large-v1-q4_k.gguf",
+            "/root/models/mxbai-embed-large-v1/ggml-model-q4_k.gguf",
+            "/root/models/gguf/mxbai-embed-large-v1-q4_k.gguf",
+        ]
+        for p in common_paths:
+            if os.path.exists(p):
+                model_path = p
+                break
+    
+    if not model_path or not os.path.exists(model_path):
+        return None
+    
+    try:
+        from llama_cpp import Llama
+        _llama_session = Llama(
+            model_path=model_path,
+            embedding=True,
+            n_ctx=512,
+            n_threads=4,
+        )
+        print(f"   llama.cpp loaded: {model_path}")
+        return _llama_session
+    except Exception as e:
+        print(f"   llama.cpp failed to load: {e}")
+        return None
+
+
+def _llama_embed(text: str) -> List[float]:
+    """Get embedding using llama.cpp (gguf model)."""
+    session = _get_llama_session()
+    if session is None:
+        raise Exception("llama.cpp session not available")
+    
+    try:
+        embedding = session.embed(text)
+        return embedding
+    except Exception as e:
+        raise Exception(f"llama.cpp embedding failed: {e}")
+
+
+# ============================================================================
+# HUGGINGFACE API BACKEND (New router endpoint)
+# ============================================================================
+
+def _hf_embed(text: str) -> List[float]:
+    """Get embedding from HuggingFace Inference API using new router endpoint."""
+    try:
+        # Use new router endpoint (NOT the deprecated api-inference.huggingface.co)
+        API_URL = f"https://router.huggingface.co/hf-inference/models/{HF_MODEL}"
+        resp = requests.post(
+            API_URL,
+            headers={
+                "Authorization": f"Bearer {HF_TOKEN}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "inputs": text,
+                "truncate": 512
+            },
+            timeout=30
+        )
+        resp.raise_for_status()
+        embedding = resp.json()
+        
+        if isinstance(embedding, list) and len(embedding) > 0:
+            return embedding
+        elif isinstance(embedding, dict) and "embedding" in embedding:
+            return embedding["embedding"]
+        else:
+            raise Exception(f"HF API returned invalid response: {embedding}")
+    except Exception as e:
+        raise Exception(f"HuggingFace API failed: {e}")
+
+
+# ============================================================================
+# ONNX BACKEND (Local runtime - already implemented)
+# ============================================================================
+
+def _get_onnx_session():
+    """Get or create ONNX runtime session."""
+    global _onx_session
+    if _onx_session is not None:
+        return _onx_session
+    
+    try:
+        import onnxruntime as ort
+        # Try to find model
+        model_path = ONNX_MODEL_PATH or "/root/models/mxbai-embed-large-v1/onnx/model_quantized.onnx"
+        _onx_session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+        print(f"   ONNX loaded: {model_path}")
+        return _onx_session
+    except Exception as e:
+        print(f"   ONNX not available: {e}")
+        return None
+
+
+def _onnx_embed(text: str) -> List[float]:
+    """Get embedding using ONNX runtime."""
+    import numpy as np
+    import json
+    
+    # Try to load tokenizer
+    tokenizer_path = "/root/models/mxbai-embed-large-v1/tokenizer.json"
+    try:
+        with open(tokenizer_path) as f:
+            tok_data = json.load(f)
+        vocab = tok_data["model"]["vocab"]
+        
+        # Simple tokenization
+        tokens = []
+        for char in text.lower():
+            tokens.append(vocab.get(char, 0))
+        
+        # Pad to 512
+        if len(tokens) < 512:
+            tokens = tokens + [0] * (512 - len(tokens))
+        
+        attention_mask = [1] * min(len(text), 512) + [0] * max(0, 512 - len(text))
+        token_type_ids = [0] * 512
+        
+        # Run inference
+        sess = _get_onnx_session()
+        if sess is None:
+            raise Exception("ONNX session not available")
+        
+        input_ids = np.array([tokens], dtype=np.int64)
+        attention_mask = np.array([attention_mask], dtype=np.int64)
+        token_type_ids = np.array([token_type_ids], dtype=np.int64)
+        
+        embeddings = sess.run(None, {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "token_type_ids": token_type_ids
+        })[0]
+        
+        # Mean pooling
+        mean_embed = np.mean(embeddings, axis=1)[0].tolist()
+        return mean_embed
+    except Exception as e:
+        raise Exception(f"ONNX embedding failed: {e}")
+
+
+# ============================================================================
+# OLLAMA BACKEND (Fallback)
+# ============================================================================
+
+def _ollama_embed(text: str) -> List[float]:
+    """Get embedding from Ollama."""
+    try:
+        resp = requests.post(
+            OLLAMA_URL, 
+            json={"model": EMBED_MODEL, "prompt": text}, 
+            timeout=60
+        )
+        resp.raise_for_status()
+        return resp.json()["embedding"]
+    except Exception as e:
+        raise Exception(f"Ollama embedding failed: {e}")
+
+
+# ============================================================================
+# UNIFIED EMBEDDING FUNCTION
+# ============================================================================
+
+def get_embedding(text: str, backend: str = None) -> List[float]:
+    """
+    Get embedding using the configured backend priority order.
+    
+    Args:
+        text: Input text to embed
+        backend: Optional override for specific backend
+        
+    Returns:
+        List of embedding floats
+    """
+    # Check cache first
+    cache = _load_embedding_cache()
+    text_hash = hashlib.md5(text.encode()).hexdigest()
+    if text_hash in cache:
+        return cache[text_hash]
+    
+    embedding = None
+    last_error = None
+    
+    # Determine which backends to try
+    if backend:
+        backends_to_try = [backend]
+    else:
+        backends_to_try = _get_backend_order()
+    
+    print(f"   Trying backends: {backends_to_try}")
+    
+    for be in backends_to_try:
+        try:
+            if be == "llama":
+                print(f"   [llama.cpp] {text[:30]}...")
+                embedding = _llama_embed(text)
+            elif be == "hf":
+                print(f"   [HF API] {text[:30]}...")
+                embedding = _hf_embed(text)
+            elif be == "onnx":
+                print(f"   [ONNX] {text[:30]}...")
+                embedding = _onnx_embed(text)
+            elif be == "ollama":
+                print(f"   [Ollama] {text[:30]}...")
+                embedding = _ollama_embed(text)
+            
+            if embedding is not None:
+                print(f"   [Success] {be} backend succeeded")
+                break
+        except Exception as e:
+            print(f"   [Failed] {be} backend failed: {e}")
+            last_error = e
+            continue
+    
+    if embedding is None:
+        raise Exception(f"All embedding backends failed. Last error: {last_error}")
+    
+    # Save to cache
+    cache[text_hash] = embedding
+    _save_embedding_cache(cache)
+    
+    return embedding
+
+
+# ============================================================================
+# DATABASE AND SEARCH (unchanged from original)
+# ============================================================================
+
 DB_PATH = os.environ.get("SEMGREP_DB_PATH", "/workspace/memory/lancedb/semgrep")
 TOP_K = 10
 BACKEND = os.environ.get("SEMGREP_BACKEND", "auto")  # sqlite | lance | auto
@@ -53,7 +394,6 @@ def _try_import_lancedb():
     """Try to import lancedb, return None if unavailable."""
     try:
         import lancedb
-
         return lancedb
     except ImportError:
         return None
@@ -84,7 +424,6 @@ def _unpack_embedding(blob: bytes) -> List[float]:
 # Abstract vector store interface
 # ---------------------------------------------------------------------------
 
-
 class VectorStore(ABC):
     """Abstract interface for vector storage backends."""
 
@@ -112,7 +451,6 @@ class VectorStore(ABC):
 # ---------------------------------------------------------------------------
 # SQLite backend
 # ---------------------------------------------------------------------------
-
 
 class SQLiteVectorStore(VectorStore):
     """Vector store backed by SQLite with BLOB embeddings and cosine similarity."""
@@ -238,7 +576,6 @@ class SQLiteVectorStore(VectorStore):
 # LanceDB backend (optional)
 # ---------------------------------------------------------------------------
 
-
 class LanceDBVectorStore(VectorStore):
     """Vector store backed by LanceDB."""
 
@@ -319,7 +656,6 @@ class LanceDBVectorStore(VectorStore):
 # Backend selection
 # ---------------------------------------------------------------------------
 
-
 def _select_backend(db_path: str, file_count: int = 0) -> VectorStore:
     """Choose the appropriate backend based on config and availability."""
     lancedb = _try_import_lancedb()
@@ -355,12 +691,15 @@ def _select_backend(db_path: str, file_count: int = 0) -> VectorStore:
 # Main class
 # ---------------------------------------------------------------------------
 
-
 class SemanticGrep:
     def __init__(self, db_path: str = DB_PATH, backend: str = None):
         self.db_path = Path(db_path)
         self._backend_override = backend
         self._store: Optional[VectorStore] = None
+        
+        # Initialize backend detection
+        print(f"\U0001f517 Embedding backend: {EMBED_BACKEND}")
+        _detect_available_backends()
 
     @property
     def store(self) -> VectorStore:
@@ -392,25 +731,8 @@ class SemanticGrep:
         return self._store
 
     def get_embedding(self, text: str) -> List[float]:
-        """Get embedding from Ollama with caching."""
-        # Check cache first
-        cache = _load_embedding_cache()
-        text_hash = hashlib.md5(text.encode()).hexdigest()
-        if text_hash in cache:
-            return cache[text_hash]
-        
-        # Get from Ollama
-        resp = requests.post(
-            OLLAMA_URL, json={"model": EMBED_MODEL, "prompt": text}, timeout=60
-        )
-        resp.raise_for_status()
-        embedding = resp.json()["embedding"]
-        
-        # Save to cache
-        cache[text_hash] = embedding
-        _save_embedding_cache(cache)
-        
-        return embedding
+        """Get embedding using the configured backend priority order."""
+        return get_embedding(text)
 
     def index_project(self, project_path: str, ignore_patterns: List[str] = None):
         """Index all code files in a project."""
