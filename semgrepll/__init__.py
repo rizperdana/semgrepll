@@ -16,6 +16,27 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from abc import ABC, abstractmethod
 import requests
+import json
+import os
+
+# Embedding cache file
+EMBED_CACHE_FILE = os.environ.get("EMBED_CACHE_FILE", "/tmp/semgrepll_cache.json")
+
+def _load_embedding_cache():
+    """Load embedding cache from file."""
+    try:
+        with open(EMBED_CACHE_FILE) as f:
+            return json.load(f)
+    except:
+        return {}
+
+def _save_embedding_cache(cache):
+    """Save embedding cache to file."""
+    try:
+        with open(EMBED_CACHE_FILE, "w") as f:
+            json.dump(cache, f)
+    except:
+        pass
 
 # Config
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/api/embeddings")
@@ -371,12 +392,25 @@ class SemanticGrep:
         return self._store
 
     def get_embedding(self, text: str) -> List[float]:
-        """Get embedding from Ollama."""
+        """Get embedding from Ollama with caching."""
+        # Check cache first
+        cache = _load_embedding_cache()
+        text_hash = hashlib.md5(text.encode()).hexdigest()
+        if text_hash in cache:
+            return cache[text_hash]
+        
+        # Get from Ollama
         resp = requests.post(
             OLLAMA_URL, json={"model": EMBED_MODEL, "prompt": text}, timeout=60
         )
         resp.raise_for_status()
-        return resp.json()["embedding"]
+        embedding = resp.json()["embedding"]
+        
+        # Save to cache
+        cache[text_hash] = embedding
+        _save_embedding_cache(cache)
+        
+        return embedding
 
     def index_project(self, project_path: str, ignore_patterns: List[str] = None):
         """Index all code files in a project."""
