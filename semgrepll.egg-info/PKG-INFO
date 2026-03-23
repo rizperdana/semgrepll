@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: semgrepll
-Version: 1.3.0
+Version: 1.3.1
 Summary: Local semantic code search - multi-backend (llama.cpp, HF API, ONNX, Ollama)
 Author-email: Ayre <ayre@rubicon.dev>
 License: MIT
@@ -18,6 +18,7 @@ Classifier: Programming Language :: Python :: 3.12
 Classifier: Topic :: Software Development :: Build Tools
 Classifier: Topic :: Software Development :: Libraries :: Python Modules
 Description-Content-Type: text/markdown
+License-File: LICENSE
 Requires-Dist: requests>=2.28.0
 Requires-Dist: numpy>=1.24.0
 Provides-Extra: lance
@@ -33,31 +34,52 @@ Provides-Extra: dev
 Requires-Dist: pytest; extra == "dev"
 Requires-Dist: black; extra == "dev"
 Requires-Dist: mypy; extra == "dev"
+Dynamic: license-file
 
 # semgrepll - Local Semantic Code Search
 
-Local semantic grep using multiple embedding backends with auto-detection.
+<p align="center">
+  <img src="semgrepll-demo.jpg" alt="semgrepll demo" width="800">
+</p>
+
+<p align="center">
+  <a href="https://pypi.org/project/semgrepll/">
+    <img src="https://img.shields.io/pypi/v/semgrepll?color=10b981" alt="PyPI">
+  </a>
+  <a href="https://github.com/rizperdana/semgrepll/blob/master/LICENSE">
+    <img src="https://img.shields.io/pypi/l/semgrepll?color=10b981" alt="License: MIT">
+  </a>
+  <a href="https://github.com/rizperdana/semgrepll">
+    <img src="https://img.shields.io/github/stars/rizperdana/semgrepll?color=10b981" alt="GitHub stars">
+  </a>
+</p>
+
+Local semantic grep using embeddings - **100% offline capable**.
 
 ## Features
 
-- **Multi-backend support**: llama.cpp, HuggingFace API, ONNX, Ollama
-- **Auto-detection**: Automatically picks fastest available backend
+- **Multi-backend support**: llama.cpp, ONNX, Ollama
+- **Auto-detection**: Automatically picks fastest available local backend
 - **Hybrid storage**: SQLite (small projects) or LanceDB (large)
-- **Offline capable**: Works without network using ONNX or Ollama
+- **100% offline**: No external connections
 - **Embedding caching**: Fast re-indexing
+- **Semantic search**: Find code by meaning, not just keywords
 
 ## Backends (priority order)
 
-1. **llama.cpp** - Fastest local (requires llama-cpp-python)
-2. **HuggingFace API** - Fastest overall (requires network + token)
-3. **ONNX** - Fast local offline (~3s)
-4. **Ollama** - Fallback (~6s)
+| Rank | Backend | Speed | Notes |
+|------|---------|-------|-------|
+| 1 | llama.cpp | ~1s | Fastest - requires GGUF model |
+| 2 | ONNX | ~3s | Local - uses HF model files |
+| 3 | Ollama | ~6s | Local server fallback |
 
 ## Installation
 
 ```bash
 pip install semgrepll
-pip install semgrepll[all]  # includes lance, onnx
+
+# Optional: ONNX backend support
+pip install semgrepll[onnx]
 ```
 
 ## Usage
@@ -66,7 +88,7 @@ pip install semgrepll[all]  # includes lance, onnx
 # Index a project (auto-detects backend)
 semgrep index /path/to/project
 
-# Search
+# Search semantically
 semgrep search "authentication logic"
 
 # List indexed projects
@@ -77,9 +99,8 @@ semgrep ls
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `EMBED_BACKEND` | Backend: auto, llama, hf, onnx, ollama | auto |
+| `EMBED_BACKEND` | Backend: auto, llama, onnx, ollama | auto |
 | `EMBED_MODEL` | Model name | mxbai-embed-large-v1 |
-| `HF_TOKEN` | HuggingFace token (for HF API) | - |
 | `LLM_MODEL_PATH` | Path to GGUF model (for llama.cpp) | - |
 | `ONNX_MODEL_PATH` | Path to ONNX model | auto-detect |
 | `SEMGREP_BACKEND` | Storage: auto, sqlite, lance | auto |
@@ -88,6 +109,10 @@ semgrep ls
 
 | Backend | Speed |
 |---------|-------|
-| HF API | ~0.5s |
+| llama.cpp | ~1s |
 | ONNX | ~3s |
 | Ollama | ~6s |
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
