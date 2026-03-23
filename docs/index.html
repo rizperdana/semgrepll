@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>semgrepll - Local Semantic Code Search</title>
+    <meta name="description" content="Local semantic code search using Ollama embeddings. Search your codebase with natural language - 100% offline, no API keys.">
+    <meta name="keywords" content="semantic search, code search, AI code, Ollama, local search, developer tools, semantic grep">
+    <meta property="og:title" content="semgrepll - Local Semantic Code Search">
+    <meta property="og:description" content="Search your codebase using natural language. No API keys, 100% offline.">
+    <meta property="og:type" content="website">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header>
+        <nav>
+            <div class="logo">semgrepll</div>
+            <div class="nav-links">
+                <a href="#features">Features</a>
+                <a href="#installation">Install</a>
+                <a href="#docs">Docs</a>
+                <a href="https://github.com/rizperdana/semgrepll">GitHub</a>
+            </div>
+        </nav>
+    </header>
+
+    <main>
+        <section class="hero">
+            <h1>Local Semantic Code Search</h1>
+            <p class="tagline">Search your codebase with natural language — no API keys, 100% offline</p>
+            <div class="cta-buttons">
+                <a href="https://pypi.org/project/semgrepll/" class="btn btn-primary">pip install semgrepll</a>
+                <a href="https://github.com/rizperdana/semgrepll" class="btn btn-secondary">View on GitHub</a>
+            </div>
+        </section>
+
+        <section id="features" class="features">
+            <h2>Why semgrepll?</h2>
+            <div class="feature-grid">
+                <div class="feature">
+                    <h3>🔒 Offline & Private</h3>
+                    <p>Your code never leaves your machine. No API calls to OpenAI or cloud services.</p>
+                </div>
+                <div class="feature">
+                    <h3>🤖 AI-Powered</h3>
+                    <p>Semantic search understands meaning — find code by describing what it does.</p>
+                </div>
+                <div class="feature">
+                    <h3>⚡ Fast</h3>
+                    <p>Local embeddings with caching. Repeated queries: 12s → 0.0006s</p>
+                </div>
+                <div class="feature">
+                    <h3>🆓 Free</h3>
+                    <p>No API keys, no subscriptions. Fully open source (MIT license).</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="installation" class="install">
+            <h2>Get Started</h2>
+            <pre><code># Install
+pip install semgrepll
+
+# Index your project
+semgrep index /path/to/project
+
+# Search semantically
+semgrep search "how does authentication work"</code></pre>
+        </section>
+
+        <section class="comparison">
+            <h2>How It Compares</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Feature</th>
+                        <th>semgrepll</th>
+                        <th>ripgrep</th>
+                        <th>Copilot</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Semantic search</td>
+                        <td>✅</td>
+                        <td>❌</td>
+                        <td>✅</td>
+                    </tr>
+                    <tr>
+                        <td>Offline</td>
+                        <td>✅</td>
+                        <td>✅</td>
+                        <td>❌</td>
+                    </tr>
+                    <tr>
+                        <td>No API keys</td>
+                        <td>✅</td>
+                        <td>✅</td>
+                        <td>❌</td>
+                    </tr>
+                    <tr>
+                        <td>Free</td>
+                        <td>✅</td>
+                        <td>✅</td>
+                        <td>❌</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+    </main>
+
+    <footer>
+        <p>Built with 🤖 by <a href="https://github.com/rizperdana">rizperdana</a> • 
+        <a href="https://github.com/rizperdana/semgrepll">GitHub</a> • 
+        <a href="https://pypi.org/project/semgrepll/">PyPI</a></p>
+    </footer>
+</body>
+</html>
