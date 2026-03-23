@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "semgrepll"
-version = "1.0.0"
-description = "Local semantic code search using Ollama embeddings + LanceDB"
+version = "1.1.0"
+description = "Local semantic code search - hybrid SQLite/LanceDB, works offline with Ollama"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
@@ -25,11 +25,13 @@ classifiers = [
 ]
 
 dependencies = [
-    "lancedb>=0.10.0",
     "requests>=2.28.0",
+    "numpy>=1.24.0",
 ]
 
 [project.optional-dependencies]
+lance = ["lancedb>=0.10.0", "pyarrow>=14.0.0"]
+all = ["lancedb>=0.10.0", "pyarrow>=14.0.0"]
 dev = ["pytest", "black", "mypy"]
 
 [project.scripts]

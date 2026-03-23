@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Semgrep - Local Semantic Code Search
-Uses Ollama embeddings + LanceDB for offline semantic search.
+Uses Ollama embeddings + SQLite or LanceDB for offline semantic search.
 """
 
 import os
@@ -9,9 +9,12 @@ import sys
 import json
 import argparse
 import hashlib
+import struct
+import sqlite3
+import math
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-import lancedb
+from abc import ABC, abstractmethod
 import requests
 
 # Config
@@ -19,13 +22,353 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/api/embeddings
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "mxbai-embed-large")
 DB_PATH = os.environ.get("SEMGREP_DB_PATH", "/workspace/memory/lancedb/semgrep")
 TOP_K = 10
+BACKEND = os.environ.get("SEMGREP_BACKEND", "auto")  # sqlite | lance | auto
+
+# Threshold: use LanceDB for projects with more files than this
+LANCEDB_FILE_THRESHOLD = 100
 
 
-class SemanticGrep:
-    def __init__(self, db_path: str = DB_PATH):
+def _try_import_lancedb():
+    """Try to import lancedb, return None if unavailable."""
+    try:
+        import lancedb
+
+        return lancedb
+    except ImportError:
+        return None
+
+
+def _cosine_similarity(a: List[float], b: List[float]) -> float:
+    """Compute cosine similarity between two vectors."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def _pack_embedding(embedding: List[float]) -> bytes:
+    """Pack a float list into bytes for SQLite BLOB storage."""
+    return struct.pack(f"{len(embedding)}f", *embedding)
+
+
+def _unpack_embedding(blob: bytes) -> List[float]:
+    """Unpack bytes back into a float list."""
+    count = len(blob) // 4
+    return list(struct.unpack(f"{count}f", blob))
+
+
+# ---------------------------------------------------------------------------
+# Abstract vector store interface
+# ---------------------------------------------------------------------------
+
+
+class VectorStore(ABC):
+    """Abstract interface for vector storage backends."""
+
+    @abstractmethod
+    def has_table(self, table_name: str) -> bool: ...
+
+    @abstractmethod
+    def create_table(self, table_name: str, records: List[Dict[str, Any]]) -> None: ...
+
+    @abstractmethod
+    def drop_table(self, table_name: str) -> None: ...
+
+    @abstractmethod
+    def search_table(
+        self, table_name: str, query_embedding: List[float], top_k: int
+    ) -> List[Dict[str, Any]]: ...
+
+    @abstractmethod
+    def list_table_names(self) -> List[str]: ...
+
+    @abstractmethod
+    def get_projects(self) -> List[str]: ...
+
+
+# ---------------------------------------------------------------------------
+# SQLite backend
+# ---------------------------------------------------------------------------
+
+
+class SQLiteVectorStore(VectorStore):
+    """Vector store backed by SQLite with BLOB embeddings and cosine similarity."""
+
+    def __init__(self, db_path: str):
+        self.db_file = Path(db_path) / "semgrep_vectors.db"
+        self.db_file.parent.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(str(self.db_file))
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
+        self._init_meta_table()
+
+    # -- schema helpers ------------------------------------------------------
+
+    def _init_meta_table(self):
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS _meta ("
+            "  table_name TEXT PRIMARY KEY,"
+            "  dim INTEGER NOT NULL"
+            ")"
+        )
+        self.conn.commit()
+
+    def _ensure_table(self, table_name: str, dim: int):
+        safe = self._safe_name(table_name)
+        self.conn.execute(
+            f"CREATE TABLE IF NOT EXISTS {safe} ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  project TEXT NOT NULL,"
+            "  file TEXT NOT NULL,"
+            "  chunk TEXT NOT NULL,"
+            "  embedding BLOB NOT NULL"
+            ")"
+        )
+        self.conn.execute(
+            "INSERT OR REPLACE INTO _meta (table_name, dim) VALUES (?, ?)",
+            (table_name, dim),
+        )
+        self.conn.commit()
+
+    @staticmethod
+    def _safe_name(name: str) -> str:
+        """Sanitize table name for SQL (only allow alphanumerics and underscores)."""
+        return "".join(c if c.isalnum() or c == "_" else "_" for c in name)
+
+    # -- VectorStore interface -----------------------------------------------
+
+    def has_table(self, table_name: str) -> bool:
+        safe = self._safe_name(table_name)
+        cur = self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (safe,)
+        )
+        return cur.fetchone() is not None
+
+    def create_table(self, table_name: str, records: List[Dict[str, Any]]) -> None:
+        if not records:
+            return
+        dim = len(records[0]["embedding"])
+        self._ensure_table(table_name, dim)
+
+        # Drop old data
+        safe = self._safe_name(table_name)
+        self.conn.execute(f"DELETE FROM {safe}")
+
+        rows = [
+            (r["project"], r["file"], r["chunk"], _pack_embedding(r["embedding"]))
+            for r in records
+        ]
+        self.conn.executemany(
+            f"INSERT INTO {safe} (project, file, chunk, embedding) VALUES (?, ?, ?, ?)",
+            rows,
+        )
+        self.conn.commit()
+
+    def drop_table(self, table_name: str) -> None:
+        safe = self._safe_name(table_name)
+        self.conn.execute(f"DROP TABLE IF EXISTS {safe}")
+        self.conn.execute("DELETE FROM _meta WHERE table_name = ?", (table_name,))
+        self.conn.commit()
+
+    def search_table(
+        self, table_name: str, query_embedding: List[float], top_k: int
+    ) -> List[Dict[str, Any]]:
+        if not self.has_table(table_name):
+            return []
+
+        safe = self._safe_name(table_name)
+        cur = self.conn.execute(f"SELECT project, file, chunk, embedding FROM {safe}")
+        scored: List[Dict[str, Any]] = []
+        for project, file, chunk, blob in cur.fetchall():
+            vec = _unpack_embedding(blob)
+            sim = _cosine_similarity(query_embedding, vec)
+            scored.append(
+                {
+                    "project": project,
+                    "file": file,
+                    "chunk": chunk,
+                    "score": round(sim, 3),
+                }
+            )
+
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        return scored[:top_k]
+
+    def list_table_names(self) -> List[str]:
+        cur = self.conn.execute("SELECT table_name FROM _meta")
+        return [row[0] for row in cur.fetchall()]
+
+    def get_projects(self) -> List[str]:
+        projects: set = set()
+        for table_name in self.list_table_names():
+            safe = self._safe_name(table_name)
+            cur = self.conn.execute(f"SELECT DISTINCT project FROM {safe}")
+            for row in cur.fetchall():
+                projects.add(row[0])
+        return sorted(projects)
+
+    def close(self):
+        self.conn.close()
+
+
+# ---------------------------------------------------------------------------
+# LanceDB backend (optional)
+# ---------------------------------------------------------------------------
+
+
+class LanceDBVectorStore(VectorStore):
+    """Vector store backed by LanceDB."""
+
+    def __init__(self, db_path: str):
+        lancedb = _try_import_lancedb()
+        if lancedb is None:
+            raise ImportError(
+                "lancedb is not installed. Install with: pip install lancedb"
+            )
         self.db_path = Path(db_path)
         self.db_path.mkdir(parents=True, exist_ok=True)
         self.db = lancedb.connect(str(self.db_path))
+
+    def has_table(self, table_name: str) -> bool:
+        return table_name in self.db.table_names()
+
+    def create_table(self, table_name: str, records: List[Dict[str, Any]]) -> None:
+        import pyarrow as pa
+
+        schema = pa.schema(
+            [
+                ("project", pa.string()),
+                ("file", pa.string()),
+                ("chunk", pa.string()),
+                ("embedding", pa.list_(pa.float32(), 1024)),
+            ]
+        )
+
+        try:
+            self.db.drop_table(table_name)
+        except Exception:
+            pass
+        table = self.db.create_table(table_name, schema=schema)
+        table.add(records)
+
+    def drop_table(self, table_name: str) -> None:
+        try:
+            self.db.drop_table(table_name)
+        except Exception:
+            pass
+
+    def search_table(
+        self, table_name: str, query_embedding: List[float], top_k: int
+    ) -> List[Dict[str, Any]]:
+        if not self.has_table(table_name):
+            return []
+        table = self.db.open_table(table_name)
+        results = table.search(query_embedding).limit(top_k).to_list()
+
+        scored = []
+        for r in results:
+            distance = r.get("_distance", 1.0)
+            score = 1.0 - distance
+            scored.append(
+                {
+                    "project": r.get("project"),
+                    "file": r.get("file"),
+                    "chunk": r.get("chunk", "")[:500],
+                    "score": round(score, 3),
+                }
+            )
+        return scored
+
+    def list_table_names(self) -> List[str]:
+        return [t for t in self.db.table_names() if t.startswith("project_")]
+
+    def get_projects(self) -> List[str]:
+        projects: set = set()
+        for t in self.list_table_names():
+            table = self.db.open_table(t)
+            rows = table.to_pandas()
+            if not rows.empty and "project" in rows.columns:
+                projects.update(rows["project"].unique())
+        return sorted(projects)
+
+
+# ---------------------------------------------------------------------------
+# Backend selection
+# ---------------------------------------------------------------------------
+
+
+def _select_backend(db_path: str, file_count: int = 0) -> VectorStore:
+    """Choose the appropriate backend based on config and availability."""
+    lancedb = _try_import_lancedb()
+    has_lancedb = lancedb is not None
+
+    # Check for existing LanceDB data (backward compat)
+    lancedb_path = Path(db_path)
+    has_lancedb_data = lancedb_path.exists() and any(
+        f.suffix == ".lance" for f in lancedb_path.rglob("*")
+    )
+
+    mode = BACKEND.lower()
+
+    if mode == "sqlite":
+        return SQLiteVectorStore(db_path)
+
+    if mode == "lance":
+        if not has_lancedb:
+            raise ImportError(
+                "SEMGREP_BACKEND=lance but lancedb is not installed. "
+                "Install with: pip install lancedb"
+            )
+        return LanceDBVectorStore(db_path)
+
+    # auto mode
+    if has_lancedb and (file_count > LANCEDB_FILE_THRESHOLD or has_lancedb_data):
+        return LanceDBVectorStore(db_path)
+
+    return SQLiteVectorStore(db_path)
+
+
+# ---------------------------------------------------------------------------
+# Main class
+# ---------------------------------------------------------------------------
+
+
+class SemanticGrep:
+    def __init__(self, db_path: str = DB_PATH, backend: str = None):
+        self.db_path = Path(db_path)
+        self._backend_override = backend
+        self._store: Optional[VectorStore] = None
+
+    @property
+    def store(self) -> VectorStore:
+        if self._store is None:
+            mode = self._backend_override or BACKEND
+            lancedb = _try_import_lancedb()
+
+            # Check for existing LanceDB data
+            has_lancedb_data = self.db_path.exists() and any(
+                f.suffix == ".lance" for f in self.db_path.rglob("*")
+            )
+
+            if mode == "sqlite":
+                self._store = SQLiteVectorStore(str(self.db_path))
+            elif mode == "lance":
+                if lancedb is None:
+                    raise ImportError(
+                        "SEMGREP_BACKEND=lance but lancedb is not installed."
+                    )
+                self._store = LanceDBVectorStore(str(self.db_path))
+            else:
+                # auto: prefer LanceDB if existing data found or available
+                if lancedb is not None and has_lancedb_data:
+                    self._store = LanceDBVectorStore(str(self.db_path))
+                elif lancedb is not None:
+                    self._store = LanceDBVectorStore(str(self.db_path))
+                else:
+                    self._store = SQLiteVectorStore(str(self.db_path))
+        return self._store
 
     def get_embedding(self, text: str) -> List[float]:
         """Get embedding from Ollama."""
@@ -41,11 +384,20 @@ class SemanticGrep:
         project_name = project_path.name
         table_name = f"project_{hashlib.md5(project_name.encode()).hexdigest()[:8]}"
 
-        print(f"📂 Indexing {project_name}...")
+        print(f"\U0001f4c2 Indexing {project_name}...")
 
         # Collect files
         files = self._collect_files(project_path, ignore_patterns or [])
         print(f"   Found {len(files)} files to index")
+
+        # Auto-select backend based on file count
+        if self._backend_override is None and BACKEND == "auto":
+            lancedb = _try_import_lancedb()
+            if lancedb is None or len(files) <= LANCEDB_FILE_THRESHOLD:
+                self._store = SQLiteVectorStore(str(self.db_path))
+            else:
+                self._store = LanceDBVectorStore(str(self.db_path))
+            print(f"   Using backend: {type(self._store).__name__}")
 
         # Embed and store
         records = []
@@ -53,7 +405,7 @@ class SemanticGrep:
             try:
                 content = file_path.read_text(errors="ignore")
                 if len(content) > 10000:
-                    content = content[:10000]  # Truncate large files
+                    content = content[:10000]
                 chunks = self._chunk_file(content, file_path.suffix)
 
                 for chunk in chunks:
@@ -69,97 +421,62 @@ class SemanticGrep:
                         )
                     except Exception as e:
                         if "500" in str(e):
-                            continue  # Skip failed chunks
-                        print(f"   ⚠️ Embedding failed for chunk in {file_path}: {e}")
+                            continue
+                        print(
+                            f"   \u26a0\ufe0f Embedding failed for chunk in {file_path}: {e}"
+                        )
                         continue
 
                 if (i + 1) % 10 == 0:
                     print(f"   Processed {i + 1}/{len(files)} files...")
             except Exception as e:
-                print(f"   ⚠️ Skipped {file_path}: {e}")
+                print(f"   \u26a0\ufe0f Skipped {file_path}: {e}")
 
         if records:
-            # Use pyarrow for schema
-            import pyarrow as pa
-
-            schema = pa.schema(
-                [
-                    ("project", pa.string()),
-                    ("file", pa.string()),
-                    ("chunk", pa.string()),
-                    ("embedding", pa.list_(pa.float32(), 1024)),
-                ]
-            )
-
-            # Drop existing table if any, then create
-            try:
-                self.db.drop_table(table_name)
-            except:
-                pass
-            table = self.db.create_table(table_name, schema=schema)
-            table.add(records)
-            print(f"✅ Indexed {len(records)} chunks from {len(files)} files")
+            self.store.create_table(table_name, records)
+            print(f"\u2705 Indexed {len(records)} chunks from {len(files)} files")
         else:
-            print("⚠️ No files indexed")
+            print("\u26a0\ufe0f No files indexed")
 
     def search(self, query: str, project: str = None, top_k: int = TOP_K) -> List[Dict]:
         """Semantic search using vector similarity."""
-        print(f"🔍 Searching: {query}")
+        print(f"\U0001f50d Searching: {query}")
 
-        # Get query embedding
         query_embedding = self.get_embedding(query)
 
-        # Determine which tables to search
         all_results = []
-        tables_resp = self.db.list_tables()
-        table_names = [t for t in tables_resp.tables if t.startswith("project_")]
+        table_names = self.store.list_table_names()
 
         if project:
-            # Extract project name from path if full path given
             project_name = Path(project).name if Path(project).exists() else project
-            # Compute the correct table hash
             table_name = f"project_{hashlib.md5(project_name.encode()).hexdigest()[:8]}"
             if table_name not in table_names:
                 print(
-                    f"   ⚠️ Project '{project_name}' not indexed. Available: {self.list_projects()}"
+                    f"   \u26a0\ufe0f Project '{project_name}' not indexed. Available: {self.list_projects()}"
                 )
                 return []
             table_names = [table_name]
-            print(f"   🔍 Searching in project: {project_name}")
+            print(f"   \U0001f50d Searching in project: {project_name}")
 
         for table_name in table_names:
-            table = self.db.open_table(table_name)
-            results = table.search(query_embedding).limit(top_k).to_list()
-
+            results = self.store.search_table(table_name, query_embedding, top_k)
             for r in results:
                 if project and r.get("project") != project_name:
                     continue
-                # LanceDB returns _distance, convert to similarity score
-                distance = r.get("_distance", 1.0)
-                score = 1.0 - distance  # Convert distance to similarity
                 all_results.append(
                     {
                         "file": r.get("file"),
                         "chunk": r.get("chunk")[:500],
-                        "score": round(score, 3),
+                        "score": r.get("score", 0),
                     }
                 )
 
-        # Sort by score and return top_k
         all_results.sort(key=lambda x: x["score"] if x["score"] else 0, reverse=True)
         return all_results[:top_k]
 
     def list_projects(self) -> List[str]:
         """List indexed projects."""
-        tables_resp = self.db.list_tables()
-        projects = set()
-        for t in tables_resp.tables:
-            if t.startswith("project_"):
-                table = self.db.open_table(t)
-                rows = table.to_pandas()
-                if not rows.empty and "project" in rows.columns:
-                    projects.update(rows["project"].unique())
-        return sorted(projects)
+        return self.store.get_projects()
 
     def _collect_files(self, path: Path, ignore_patterns: List[str]) -> List[Path]:
         """Collect code files from path."""
@@ -190,7 +507,6 @@ class SemanticGrep:
             ".yml",
         }
 
-        # Default ignore dirs
         default_ignores = {
             "node_modules",
             ".git",
@@ -216,11 +532,9 @@ class SemanticGrep:
             rel = f.relative_to(path)
             rel_str = str(rel)
 
-            # Check default ignores
             if any(p in rel_str for p in default_ignores):
                 continue
 
-            # Check gitignore patterns
             skip = False
             for pattern in ignore_set:
                 if pattern in rel_str or f.name == pattern:
@@ -229,7 +543,6 @@ class SemanticGrep:
             if skip:
                 continue
 
-            # Check extension
             if f.suffix in extensions:
                 files.append(f)
 
@@ -240,7 +553,6 @@ class SemanticGrep:
         lines = content.split("\n")
         chunks = []
 
-        # Split into overlapping chunks of ~50 lines
         chunk_size = 50
         overlap = 5
 
@@ -248,7 +560,7 @@ class SemanticGrep:
             chunk = "\n".join(lines[i : i + chunk_size])
             if chunk.strip():
                 chunks.append(chunk)
-            if len(chunks) >= 20:  # Limit chunks per file
+            if len(chunks) >= 20:
                 break
 
         return chunks or [content[:2000]]
@@ -283,7 +595,6 @@ def main():
 
     elif args.command == "search":
         if args.exact:
-            # Fallback to ripgrep
             import subprocess
 
             result = subprocess.run(
@@ -296,7 +607,7 @@ def main():
             results = sg.search(args.query, args.project)
             if results:
                 for r in results:
-                    print(f"\n📄 {r['file']} (score: {r['score']:.3f})")
+                    print(f"\n\U0001f4c4 {r['file']} (score: {r['score']:.3f})")
                     print(f"   {r['chunk'][:300]}...")
             else:
                 print("No results found")
