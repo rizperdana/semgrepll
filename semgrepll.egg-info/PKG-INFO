@@ -1,0 +1,101 @@
+Metadata-Version: 2.4
+Name: semgrepll
+Version: 1.0.0
+Summary: Local semantic code search using Ollama embeddings + LanceDB
+Author-email: Ayre <ayre@rubicon.dev>
+License: MIT
+Project-URL: Homepage, https://github.com/rizperdana/semgrepll
+Project-URL: Repository, https://github.com/rizperdana/semgrepll
+Project-URL: Issues, https://github.com/rizperdana/semgrepll/issues
+Keywords: semantic,search,code,ollama,lancedb,embedding
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Software Development :: Build Tools
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Description-Content-Type: text/markdown
+Requires-Dist: lancedb>=0.10.0
+Requires-Dist: requests>=2.28.0
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: black; extra == "dev"
+Requires-Dist: mypy; extra == "dev"
+
+# semgrepll
+
+Local semantic code search using Ollama embeddings + LanceDB.
+
+## Installation
+
+```bash
+pip install semgrepll
+```
+
+## Requirements
+
+- **Ollama** running with `mxbai-embed-large` model at `http://127.0.0.1:11434`
+- **LanceDB** for vector storage (installed automatically)
+
+## Quick Start
+
+```bash
+# Index a project (run once)
+semgrep index /path/to/project
+
+# Search semantically
+semgrep search "how does authentication work"
+
+# List indexed projects
+semgrep ls
+
+# Remove a project
+semgrep rm project-name
+```
+
+## Usage
+
+```
+semgrep [command] [options]
+
+Commands:
+  index <path>    Index a project for semantic search
+  search <query>  Search indexed code semantically
+  ls              List indexed projects
+  rm <project>    Remove a project index
+
+Options:
+  -p, --project PROJECT  Filter to specific project
+  -e, --exact PATTERN   Fallback to ripgrep
+  -c, --context N       Context lines for exact search
+  -h, --help            Show help
+```
+
+## Configuration
+
+```bash
+# Default Ollama URL (can override)
+export OLLAMA_URL="http://127.0.0.1:11434/api/embeddings"
+
+# Default embed model
+export EMBED_MODEL="mxbai-embed-large"
+
+# Database path
+export SEMGREP_DB_PATH="/path/to/db"
+```
+
+## When to Use
+
+| Scenario | Tool |
+|----------|------|
+| Small codebase (<20 files) | Use `rg` directly |
+| Large codebase, know pattern | Use `rg` |
+| Exploratory search | semgrepll |
+| Natural language query | semgrepll |
+
+## License
+
+MIT

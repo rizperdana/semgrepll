@@ -1,0 +1,11 @@
+README.md
+pyproject.toml
+semgrepll/__init__.py
+semgrepll/__main__.py
+semgrepll/cli.py
+semgrepll.egg-info/PKG-INFO
+semgrepll.egg-info/SOURCES.txt
+semgrepll.egg-info/dependency_links.txt
+semgrepll.egg-info/entry_points.txt
+semgrepll.egg-info/requires.txt
+semgrepll.egg-info/top_level.txt
