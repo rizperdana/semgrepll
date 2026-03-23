@@ -13,12 +13,13 @@
             --grid-cols: 12;
             --grid-gap: 1rem;
             --base-unit: 8px;
-            --color-text: #000000;
-            --color-bg: #FFFFFF;
-            --color-muted: #666666;
-            --color-border: #E5E5E5;
-            --accent: #10B981;
-            --accent-dark: #059669;
+            --color-bg: #0D1117;
+            --color-surface: #161B22;
+            --color-border: #30363D;
+            --color-text: #E6EDF3;
+            --color-muted: #8B949E;
+            --accent: #3FB950;
+            --accent-dark: #238636;
         }
         
         * {
@@ -41,19 +42,21 @@
             padding: 0 2rem;
         }
         
-        /* Swiss Grid Layout */
         .grid {
             display: grid;
             grid-template-columns: repeat(var(--grid-cols), 1fr);
             gap: var(--grid-gap);
         }
         
-        /* Typography */
         h1 {
             font-size: clamp(2.5rem, 5vw, 4rem);
             font-weight: 700;
             letter-spacing: -0.02em;
             line-height: 1.1;
+            background: linear-gradient(135deg, #E6EDF3 0%, #8B949E 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
         
         h2 {
@@ -61,12 +64,14 @@
             font-weight: 600;
             letter-spacing: -0.01em;
             margin-bottom: 1rem;
+            color: var(--color-text);
         }
         
         h3 {
             font-size: 1.25rem;
             font-weight: 600;
             margin-bottom: 0.5rem;
+            color: var(--color-text);
         }
         
         p {
@@ -80,7 +85,7 @@
             border-bottom: 1px solid var(--color-border);
             position: sticky;
             top: 0;
-            background: rgba(255,255,255,0.95);
+            background: rgba(13, 17, 23, 0.95);
             backdrop-filter: blur(8px);
             z-index: 100;
         }
@@ -116,22 +121,26 @@
         /* Hero */
         .hero {
             padding: 6rem 0 4rem;
+            background: radial-gradient(ellipse at top, #161B22 0%, #0D1117 70%);
         }
         
         .hero-badge {
             display: inline-block;
             padding: 0.375rem 0.75rem;
-            background: #F5F5F5;
+            background: var(--color-surface);
+            border: 1px solid var(--color-border);
             border-radius: 4px;
             font-size: 0.75rem;
             font-weight: 500;
             color: var(--color-muted);
-            margin-bottom: 1.5rem;
+            margin-bottom: 1rem;
+            margin-right: 0.5rem;
         }
         
         .hero-badge.success {
-            background: #ECFDF5;
-            color: var(--accent-dark);
+            background: rgba(63, 185, 80, 0.15);
+            border-color: var(--accent);
+            color: var(--accent);
         }
         
         .hero h1 {
@@ -141,22 +150,24 @@
         .hero p {
             font-size: 1.125rem;
             margin-bottom: 2rem;
+            color: var(--color-muted);
         }
         
         .install-cmd {
             display: inline-flex;
             align-items: center;
-            background: var(--color-text);
-            color: var(--color-bg);
+            background: var(--accent);
+            color: #0D1117;
             padding: 0.75rem 1.25rem;
             border-radius: 6px;
             font-family: 'JetBrains Mono', monospace;
             font-size: 0.9rem;
+            font-weight: 600;
         }
         
         .install-cmd .dollar {
-            color: var(--accent);
             margin-right: 0.5rem;
+            opacity: 0.7;
         }
         
         /* Demo Image */
@@ -184,6 +195,7 @@
         .feature-card {
             grid-column: span 4;
             padding: 1.5rem;
+            background: var(--color-surface);
             border: 1px solid var(--color-border);
             border-radius: 8px;
             transition: border-color 0.2s;
@@ -200,12 +212,13 @@
         
         .feature-card p {
             font-size: 0.9rem;
+            color: var(--color-muted);
         }
         
         /* Backends */
         .backends {
             padding: 4rem 0;
-            background: #FAFAFA;
+            background: var(--color-surface);
         }
         
         .backend-item {
@@ -223,7 +236,7 @@
             width: 32px;
             height: 32px;
             background: var(--accent);
-            color: white;
+            color: #0D1117;
             border-radius: 50%;
             display: flex;
             align-items: center;
@@ -236,6 +249,7 @@
         .backend-info h4 {
             font-weight: 600;
             font-size: 0.95rem;
+            color: var(--color-text);
         }
         
         .backend-info span {
@@ -247,8 +261,8 @@
             margin-left: auto;
             font-family: 'JetBrains Mono', monospace;
             font-size: 0.8rem;
-            color: var(--accent-dark);
-            background: #ECFDF5;
+            color: var(--accent);
+            background: rgba(63, 185, 80, 0.15);
             padding: 0.25rem 0.5rem;
             border-radius: 4px;
         }
@@ -263,7 +277,8 @@
         }
         
         .code-block {
-            background: #1A1A1A;
+            background: #0D1117;
+            border: 1px solid var(--color-border);
             border-radius: 8px;
             overflow: hidden;
             max-width: 700px;
@@ -273,8 +288,8 @@
             display: flex;
             gap: 6px;
             padding: 0.75rem 1rem;
-            background: #2A2A2A;
-            border-bottom: 1px solid #333;
+            background: #161B22;
+            border-bottom: 1px solid var(--color-border);
         }
         
         .code-dot {
@@ -292,19 +307,20 @@
             font-family: 'JetBrains Mono', monospace;
             font-size: 0.85rem;
             line-height: 1.6;
-            color: #E5E5E5;
+            color: #E6EDF3;
             overflow-x: auto;
         }
         
-        .code-comment { color: #666; }
-        .code-keyword { color: #C792EA; }
-        .code-string { color: #C3E88D; }
-        .dollar { color: #82AAFF; }
+        .code-comment { color: #8B949E; }
+        .code-keyword { color: #FF7B72; }
+        .code-string { color: #A5D6FF; }
+        .dollar { color: #79C0FF; }
         
         /* CTA */
         .cta {
             padding: 4rem 0;
             text-align: center;
+            background: radial-gradient(ellipse at bottom, #161B22 0%, #0D1117 70%);
         }
         
         .cta h2 {
@@ -331,7 +347,7 @@
         
         .btn-primary {
             background: var(--accent);
-            color: white;
+            color: #0D1117;
         }
         
         .btn-primary:hover {
@@ -459,7 +475,7 @@
     <section class="backends" id="backends">
         <div class="container">
             <h2>Backend Priority</h2>
-            <p style="margin-bottom: 2rem;">Auto-detects fastest. Set EMBED_BACKEND to override.</p>
+            <p style="margin-bottom: 2rem; color: var(--color-muted);">Auto-detects fastest. Set EMBED_BACKEND to override.</p>
             
             <div class="grid">
                 <div class="backend-item">
