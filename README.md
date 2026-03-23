@@ -1,6 +1,22 @@
 # semgrepll - Local Semantic Code Search
 
-Local semantic grep using multiple embedding backends - 100% offline capable.
+<p align="center">
+  <img src="semgrepll-demo.jpg" alt="semgrepll demo" width="800">
+</p>
+
+<p align="center">
+  <a href="https://pypi.org/project/semgrepll/">
+    <img src="https://img.shields.io/pypi/v/semgrepll?color=10b981" alt="PyPI">
+  </a>
+  <a href="https://github.com/rizperdana/semgrepll/blob/master/LICENSE">
+    <img src="https://img.shields.io/pypi/l/semgrepll?color=10b981" alt="License: MIT">
+  </a>
+  <a href="https://github.com/rizperdana/semgrepll">
+    <img src="https://img.shields.io/github/stars/rizperdana/semgrepll?color=10b981" alt="GitHub stars">
+  </a>
+</p>
+
+Local semantic grep using embeddings - **100% offline capable**.
 
 ## Features
 
@@ -9,18 +25,23 @@ Local semantic grep using multiple embedding backends - 100% offline capable.
 - **Hybrid storage**: SQLite (small projects) or LanceDB (large)
 - **100% offline**: No external connections
 - **Embedding caching**: Fast re-indexing
+- **Semantic search**: Find code by meaning, not just keywords
 
 ## Backends (priority order)
 
-1. **llama.cpp** - Fastest local (requires llama-cpp-python + GGUF model)
-2. **ONNX** - Local runtime using HuggingFace model files (~3s)
-3. **Ollama** - Local server fallback (~6s)
+| Rank | Backend | Speed | Notes |
+|------|---------|-------|-------|
+| 1 | llama.cpp | ~1s | Fastest - requires GGUF model |
+| 2 | ONNX | ~3s | Local - uses HF model files |
+| 3 | Ollama | ~6s | Local server fallback |
 
 ## Installation
 
 ```bash
 pip install semgrepll
-pip install semgrepll[onnx]  # for ONNX backend
+
+# Optional: ONNX backend support
+pip install semgrepll[onnx]
 ```
 
 ## Usage
@@ -29,7 +50,7 @@ pip install semgrepll[onnx]  # for ONNX backend
 # Index a project (auto-detects backend)
 semgrep index /path/to/project
 
-# Search
+# Search semantically
 semgrep search "authentication logic"
 
 # List indexed projects
@@ -50,6 +71,10 @@ semgrep ls
 
 | Backend | Speed |
 |---------|-------|
-| llama.cpp | ~1s (theoretical) |
+| llama.cpp | ~1s |
 | ONNX | ~3s |
 | Ollama | ~6s |
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
